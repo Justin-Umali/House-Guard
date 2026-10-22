@@ -1,0 +1,14 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Only the homeowner accounts listed here may READ. Nobody may write from a browser.
+    // (The Raspberry Pi writes with the Admin key, which bypasses these rules.)
+    match /{document=**} {
+      allow read: if request.auth != null
+                  && request.auth.token.email in [
+                       'homeowner@example.com'      // <-- replace with your real login email(s)
+                     ];
+      allow write: if false;
+    }
+  }
+}

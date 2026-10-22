@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HomeGuard - Home Security Dashboard</title>
+  <meta name="description" content="HomeGuard: AI-powered home security alerts and event history. Sign in to view.">
+  <style>
+    :root{--bg:#0f1419;--panel:#171e26;--line:#26313d;--text:#e6edf3;--muted:#8b98a5;
+      --ok:#2ea043;--l1:#d4a72c;--l2:#f0883e;--l3:#f85149;--accent:#3b82f6}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+    main{max-width:900px;margin:0 auto;padding:16px}
+    header{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+    .brand{font-weight:700;font-size:18px}
+    .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px}
+    .narrow{max-width:380px;margin:10vh auto}
+    h1,h2{margin:0 0 10px}
+    .muted{color:var(--muted)}.small{font-size:13px}
+    label{display:block;margin:10px 0;font-weight:600}
+    input{width:100%;margin-top:4px;padding:10px;border-radius:8px;border:1px solid var(--line);background:#0f1419;color:var(--text);font:inherit}
+    button{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:10px 16px;font:inherit;font-weight:600;cursor:pointer}
+    button.ghost{background:none;color:var(--muted);padding:6px 10px}
+    .err{background:#3a1a1c;border:1px solid var(--l3);padding:10px 14px;border-radius:8px;margin-top:12px}
+    .hidden{display:none}
+    .banner{padding:14px 16px;border-radius:10px;font-weight:700;font-size:18px;background:var(--ok);color:#fff}
+    .banner.l1{background:var(--l1);color:#111}.banner.l2{background:var(--l2);color:#111}
+    .banner.l3{background:var(--l3);animation:pulse 1s infinite}.banner.off{background:#444}
+    @keyframes pulse{50%{opacity:.65}}
+    .tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+    .tools input{flex:1;min-width:180px;margin:0}
+    .chip{padding:6px 12px;border:1px solid var(--line);border-radius:99px;background:none;color:var(--muted);font-weight:500}
+    .chip.active{background:var(--accent);border-color:var(--accent);color:#fff}
+    ul{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+    li.ev{display:flex;gap:12px;padding:10px;border:1px solid var(--line);border-radius:8px}
+    li.ev img,li.ev .noimg{width:120px;height:90px;object-fit:cover;border-radius:6px;background:#000;flex:none;cursor:zoom-in}
+    .pill{display:inline-block;padding:2px 8px;border-radius:99px;font-size:12px;font-weight:700;color:#111;margin-bottom:4px}
+    .pill.l1{background:var(--l1)}.pill.l2{background:var(--l2)}.pill.l3{background:var(--l3);color:#fff}
+    #lightbox{position:fixed;inset:0;background:rgba(0,0,0,.85);display:flex;align-items:center;justify-content:center;cursor:zoom-out}
+    #lightbox img{max-width:95vw;max-height:90vh;border-radius:8px}
+  </style>
+</head>
+<body>
+  <header>
+    <span class="brand">&#128737; HomeGuard</span>
+    <span id="who" class="hidden"><span id="email" class="muted small"></span> <button class="ghost" id="logout">Log out</button></span>
+  </header>
+
+  <main>
+    <!-- Sign in -->
+    <section id="login" class="card narrow">
+      <h1>HomeGuard</h1>
+      <p class="muted">AI-powered home security alerts and event history. Sign in with your homeowner account.</p>
+      <form id="loginForm">
+        <label>Email <input id="em" type="email" autocomplete="username" required></label>
+        <label>Password <input id="pw" type="password" autocomplete="current-password" required></label>
+        <button type="submit">Sign in</button>
+      </form>
+      <div id="loginErr" class="err hidden"></div>
+    </section>
+
+    <!-- Dashboard -->
+    <section id="app" class="hidden">
+      <div class="card">
+        <div id="banner" class="banner off">Connecting...</div>
+        <p id="statusInfo" class="muted small"></p>
+      </div>
+
+      <div class="card">
+        <h2>Events</h2>
+        <div class="tools">
+          <input id="search" type="search" placeholder="Search events (e.g. danger, person, 10/22)">
+          <button class="chip active" data-min="1">All</button>
+          <button class="chip" data-min="2">Level 2+</button>
+          <button class="chip" data-min="3">Danger</button>
+        </div>
+        <p id="count" class="muted small"></p>
+        <div id="dataErr" class="err hidden"></div>
+        <ul id="events"></ul>
+      </div>
+    </section>
+  </main>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut }
+      from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+    import { getFirestore, collection, query, orderBy, limit, onSnapshot, doc }
+      from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+    import { firebaseConfig } from "./firebase-config.js";
+
+    const $ = (id) => document.getElementById(id);
+    const NAMES = { 0: "Idle", 1: "Person seen", 2: "Motion confirmed", 3: "DANGER" };
+    const fmt = (ts) => new Date(ts * 1000).toLocaleString();
+
+    if (firebaseConfig.apiKey.startsWith("PASTE")) {
+      $("loginErr").textContent = "Firebase is not configured yet. Edit docs/firebase-config.js.";
+      $("loginErr").classList.remove("hidden");
+    }
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    let events = [], minLevel = 1, term = "", unsubs = [], lastStatus = null;
+
+    // ---------- login ----------
+    $("loginForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      $("loginErr").classList.add("hidden");
+      try {
+        await signInWithEmailAndPassword(auth, $("em").value.trim(), $("pw").value);
+      } catch (err) {
+        $("loginErr").textContent = "Sign-in failed. Check your email and password.";
+        $("loginErr").classList.remove("hidden");
+      }
+    });
+    $("logout").addEventListener("click", () => signOut(auth));
+
+    onAuthStateChanged(auth, (user) => {
+      unsubs.forEach((u) => u()); unsubs = [];
+      if (user) {
+        $("login").classList.add("hidden");
+        $("app").classList.remove("hidden");
+        $("who").classList.remove("hidden");
+        $("email").textContent = user.email;
+        subscribe();
+      } else {
+        $("login").classList.remove("hidden");
+        $("app").classList.add("hidden");
+        $("who").classList.add("hidden");
+        $("pw").value = "";
+        events = []; lastStatus = null;
+      }
+    });
+
+    // ---------- live data ----------
+    function subscribe() {
+      const onErr = (err) => {
+        $("dataErr").textContent = err.code === "permission-denied"
+          ? "This account is not on the allowed list (see firestore.rules)."
+          : "Could not load data: " + err.message;
+        $("dataErr").classList.remove("hidden");
+      };
+      unsubs.push(onSnapshot(doc(db, "status", "current"), (snap) => {
+        lastStatus = snap.exists() ? snap.data() : null;
+        renderStatus();
+      }, onErr));
+      unsubs.push(onSnapshot(query(collection(db, "events"), orderBy("ts", "desc"), limit(150)), (snap) => {
+        $("dataErr").classList.add("hidden");
+        events = snap.docs.map((d) => d.data());
+        renderEvents();
+      }, onErr));
+    }
+
+    function renderStatus() {
+      const b = $("banner"), info = $("statusInfo");
+      if (!lastStatus) { b.className = "banner off"; b.textContent = "No data yet"; info.textContent = "Waiting for the Raspberry Pi to report."; return; }
+      const age = Date.now() / 1000 - lastStatus.updated;
+      if (age > 180) {
+        b.className = "banner off";
+        b.textContent = "Pi offline";
+        info.textContent = "Last report " + fmt(lastStatus.updated) + ".";
+        return;
+      }
+      b.className = "banner l" + lastStatus.level;
+      b.textContent = "Level " + lastStatus.level + " · " + (NAMES[lastStatus.level] ?? "?");
+      info.textContent = (lastStatus.armed ? "Armed" : "DISARMED") + " · camera " +
+        (lastStatus.camera_ok ? "online" : "OFFLINE") + " · " + lastStatus.detector +
+        " · updated " + Math.round(age) + "s ago";
+    }
+    setInterval(renderStatus, 15000);
+
+    // ---------- events list + search ----------
+    function renderEvents() {
+      const list = $("events");
+      list.replaceChildren();
+      const t = term.trim().toLowerCase();
+      const shown = events.filter((e) => e.level >= minLevel &&
+        (!t || `${e.message} ${NAMES[e.level]} level ${e.level} ${fmt(e.ts)}`.toLowerCase().includes(t)));
+      $("count").textContent = `${shown.length} of ${events.length} events`;
+      if (!shown.length) {
+        const li = document.createElement("li");
+        li.className = "muted"; li.textContent = "No events found.";
+        list.appendChild(li); return;
+      }
+      for (const e of shown) {
+        const li = document.createElement("li"); li.className = "ev";
+        let media;
+        if (typeof e.thumb === "string" && e.thumb.startsWith("data:image/jpeg;base64,")) {
+          media = document.createElement("img"); media.src = e.thumb; media.alt = "snapshot";
+          media.addEventListener("click", () => openLightbox(e.thumb));
+        } else { media = document.createElement("div"); media.className = "noimg"; }
+        const box = document.createElement("div");
+        const pill = document.createElement("span");
+        pill.className = "pill l" + e.level; pill.textContent = "L" + e.level + " " + NAMES[e.level];
+        const msg = document.createElement("div"); msg.textContent = e.message;
+        const when = document.createElement("div"); when.className = "muted small"; when.textContent = fmt(e.ts);
+        box.append(pill, msg, when);
+        li.append(media, box); list.appendChild(li);
+      }
+    }
+    $("search").addEventListener("input", (e) => { term = e.target.value; renderEvents(); });
+    document.querySelectorAll(".chip").forEach((c) => c.addEventListener("click", () => {
+      document.querySelectorAll(".chip").forEach((x) => x.classList.remove("active"));
+      c.classList.add("active"); minLevel = Number(c.dataset.min); renderEvents();
+    }));
+
+    function openLightbox(src) {
+      const box = document.createElement("div"); box.id = "lightbox";
+      const img = document.createElement("img"); img.src = src; box.appendChild(img);
+      box.addEventListener("click", () => box.remove()); document.body.appendChild(box);
+    }
+  </script>
+</body>
+</html>
